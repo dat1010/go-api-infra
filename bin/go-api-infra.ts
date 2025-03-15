@@ -1,20 +1,20 @@
 #!/usr/bin/env node
 import * as cdk from 'aws-cdk-lib';
-import { GoApiInfraStack } from '../lib/go-api-infra-stack';
+
+import { GoApiInfraStack } from '../lib/go-api-infra-stack'; // staging stack
+import { GoApiProdInfraStack } from '../lib/go-api-prod-infra-stack'; // production stack
 
 const app = new cdk.App();
-new GoApiInfraStack(app, 'GoApiInfraStack', {
-  /* If you don't specify 'env', this stack will be environment-agnostic.
-   * Account/Region-dependent features and context lookups will not work,
-   * but a single synthesized template can be deployed anywhere. */
 
-  /* Uncomment the next line to specialize this stack for the AWS Account
-   * and Region that are implied by the current CLI configuration. */
-  // env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: process.env.CDK_DEFAULT_REGION },
+// Instantiate your staging environment (if needed)
 
-  /* Uncomment the next line if you know exactly what Account and Region you
-   * want to deploy the stack to. */
-  // env: { account: '123456789012', region: 'us-east-1' },
+new GoApiInfraStack(app, 'GoApiStagingInfraStack');
 
-  /* For more information, see https://docs.aws.amazon.com/cdk/latest/guide/environments.html */
+// Instantiate your production environment
+new GoApiProdInfraStack(app, 'GoApiProdInfraStack', {
+  env: { 
+    account: process.env.CDK_DEFAULT_ACCOUNT, 
+    region: process.env.CDK_DEFAULT_REGION 
+  },
 });
+
