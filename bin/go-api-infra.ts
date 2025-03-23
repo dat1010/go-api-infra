@@ -12,9 +12,9 @@ new GoApiInfraStack(app, 'GoApiStagingInfraStack');
 
 // Instantiate your production environment
 new GoApiProdInfraStack(app, 'GoApiProdInfraStack', {
-  env: { 
-    account: process.env.CDK_DEFAULT_ACCOUNT, 
-    region: process.env.CDK_DEFAULT_REGION 
+  env: {
+    account: process.env.CDK_DEFAULT_ACCOUNT,
+    region: process.env.CDK_DEFAULT_REGION
   },
 });
 

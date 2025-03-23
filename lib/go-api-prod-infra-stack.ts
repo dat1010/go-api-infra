@@ -28,10 +28,14 @@ export class GoApiProdInfraStack extends cdk.Stack {
       service: ec2.GatewayVpcEndpointAwsService.S3,
     });
 
-
     // Add a VPC endpoint for CloudWatch Logs to enable logging without public internet access
     vpc.addInterfaceEndpoint('CloudWatchLogsEndpoint', {
       service: ec2.InterfaceVpcEndpointAwsService.CLOUDWATCH_LOGS,
+    });
+
+    // Add this after your other VPC endpoints
+    vpc.addInterfaceEndpoint('SecretsManagerEndpoint', {
+      service: ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER,
     });
 
     // Create the ECS Cluster within the VPC
@@ -48,9 +52,11 @@ export class GoApiProdInfraStack extends cdk.Stack {
 
         image: ecs.ContainerImage.fromRegistry('069597727371.dkr.ecr.us-east-1.amazonaws.com/go-api:latest'),
         containerPort: 8080,
+        enableLogging: true,
 
       },
       publicLoadBalancer: true,
+      assignPublicIp: true, // Change to true temporarily to test connectivity
     });
 
 
@@ -87,6 +93,17 @@ export class GoApiProdInfraStack extends cdk.Stack {
         resources: ["*"],
       })
     );
+
+    // Grant the task execution role permissions to access Secrets Manager
+    // This allows the task to call secretsmanager:GetSecretValue on your secret ARN.
+    fargateService.taskDefinition.addToExecutionRolePolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: ["secretsmanager:GetSecretValue"],
+        resources: ["arn:aws:secretsmanager:us-east-1:069597727371:secret:staging/go-api-3V2g50*"],
+      })
+    );
+
 
     // Output the load balancer DNS so you can easily access the service
     new cdk.CfnOutput(this, 'LoadBalancerDNS', {

@@ -1,4 +1,3 @@
-
 import * as cdk from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
@@ -7,15 +6,15 @@ import * as ecsPatterns from 'aws-cdk-lib/aws-ecs-patterns';
 import * as iam from 'aws-cdk-lib/aws-iam';
 
 export class GoApiInfraStack extends cdk.Stack {
-    constructor(scope: Construct, id: string, props?: cdk.StackProps) {
+  constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
 
-    //Creating vpc
+    // Creating VPC
     const vpc = new ec2.Vpc(this, 'GoApiVpc', { maxAzs: 2 });
-    //Creating the actuall ecs cluster
+    // Creating the ECS cluster
     const cluster = new ecs.Cluster(this, 'GoApiCluster', { vpc: vpc });
 
-    // Creation the fargate service that will hose our docker image/container
+    // Creating the Fargate service that will host our docker image/container
     const fargateService = new ecsPatterns.ApplicationLoadBalancedFargateService(this, 'GoApiFargateService', {
       cluster: cluster,
       cpu: 256,
@@ -29,10 +28,6 @@ export class GoApiInfraStack extends cdk.Stack {
     });
 
     // Update the ALB health check to use /api/healthcheck instead of the default "/"
-    // we needed to setup this explicit health check because our code base doesn't
-    // doesn't return 200 at root or / 
-    // This caused our task in our cluster to continuly spin up and fail because it didn't know the
-    // api was healthy
     fargateService.targetGroup.configureHealthCheck({
       path: '/api/healthcheck',
       interval: cdk.Duration.seconds(30),
@@ -41,14 +36,7 @@ export class GoApiInfraStack extends cdk.Stack {
       unhealthyThresholdCount: 5,
     });
 
-    // This we had to add so our fargate ecs task had access to ecr
-    // This script doesn't create the ecr registry. I created it manually with
-    // aws ecr create-repository --repository-name go-api
-    // That aws cli command created our ecr registry then I pushed it up mannually
-    // First we need to tag our image. then push it to ecr
-    // docker tag go-api:latest 069597727371.dkr.ecr.us-east-1.amazonaws.com/go-api:latest
-    // docker push 069597727371.dkr.ecr.us-east-1.amazonaws.com/go-api:latest
-    // This is what we need to do in github actions ^
+    // Grant the task execution role permissions to access ECR
     fargateService.taskDefinition.addToExecutionRolePolicy(
       new iam.PolicyStatement({
         effect: iam.Effect.ALLOW,
@@ -62,8 +50,19 @@ export class GoApiInfraStack extends cdk.Stack {
       })
     );
 
+    // Grant the task execution role permissions to access Secrets Manager
+    // This allows the task to call secretsmanager:GetSecretValue on your secret ARN.
+    fargateService.taskDefinition.addToExecutionRolePolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: ["secretsmanager:GetSecretValue"],
+        resources: ["arn:aws:secretsmanager:us-east-1:069597727371:secret:staging/go-api-3V2g50*"],
+      })
+    );
+
     new cdk.CfnOutput(this, 'LoadBalancerDNS', {
       value: fargateService.loadBalancer.loadBalancerDnsName,
     });
   }
 }
+
