@@ -4,6 +4,7 @@ import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
 import * as ecsPatterns from 'aws-cdk-lib/aws-ecs-patterns';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import * as acm from 'aws-cdk-lib/aws-certificatemanager';
 
 export class GoApiInfraStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
@@ -13,6 +14,13 @@ export class GoApiInfraStack extends cdk.Stack {
     const vpc = new ec2.Vpc(this, 'GoApiVpc', { maxAzs: 2 });
     // Creating the ECS cluster
     const cluster = new ecs.Cluster(this, 'GoApiCluster', { vpc: vpc });
+
+    // Reference existing certificate
+    const certificate = acm.Certificate.fromCertificateArn(
+      this, 
+      'APICertificate', 
+      'arn:aws:acm:us-east-1:069597727371:certificate/76736501-533a-460e-94b9-fded9ef7abc9'
+    );
 
     // Creating the Fargate service that will host our docker image/container
     const fargateService = new ecsPatterns.ApplicationLoadBalancedFargateService(this, 'GoApiFargateService', {
@@ -25,6 +33,8 @@ export class GoApiInfraStack extends cdk.Stack {
         containerPort: 8080,
       },
       publicLoadBalancer: true,
+      certificate: certificate,
+      redirectHTTP: true, // Optional: Redirects HTTP to HTTPS
     });
 
     // Update the ALB health check to use /api/healthcheck instead of the default "/"
