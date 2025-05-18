@@ -19,7 +19,7 @@ export class GoApiInfraStack extends cdk.Stack {
     const certificate = acm.Certificate.fromCertificateArn(
       this, 
       'APICertificate', 
-      'arn:aws:acm:us-east-1:069597727371:certificate/76736501-533a-460e-94b9-fded9ef7abc9'
+      'arn:aws:acm:us-east-1:069597727371:certificate/146132c0-6175-4ce3-8edf-0d4108d53287'
     );
 
     // Creating the Fargate service that will host our docker image/container
