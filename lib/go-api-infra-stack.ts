@@ -1,3 +1,4 @@
+
 import * as cdk from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
@@ -11,48 +12,55 @@ export class GoApiInfraStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
 
-    // Creating VPC
+    // VPC and ECS Cluster
     const vpc = new ec2.Vpc(this, 'GoApiVpc', { maxAzs: 2 });
-    // Creating the ECS cluster
-    const cluster = new ecs.Cluster(this, 'GoApiCluster', { vpc: vpc });
+    const cluster = new ecs.Cluster(this, 'GoApiCluster', { vpc });
 
     // Create a simple Lambda function
     const processDataLambda = new lambda.Function(this, 'ProcessDataLambda', {
       runtime: lambda.Runtime.PYTHON_3_9,
       handler: 'index.handler',
-      code: lambda.Code.fromInline(`
-def handler(event, context):
-    print("Received event:", event)
-    return {
-        'statusCode': 200,
-        'body': 'Event received successfully!'
-    }
-      `),
+      code: lambda.Code.fromInline(
+        `def handler(event, context):\n  print(\"Received event:\", event)\n  return { 'statusCode': 200, 'body': 'Event received successfully!' }`
+      ),
+    });
+
+    // Allow EventBridge to invoke the Lambda (managed out-of-band)
+    processDataLambda.addPermission('AllowEventBridgeInvoke', {
+      principal: new iam.ServicePrincipal('events.amazonaws.com'),
+      action: 'lambda:InvokeFunction',
+      sourceArn: `arn:aws:events:${this.region}:${this.account}:rule/*`,
     });
 
     // Reference existing certificate
     const certificate = acm.Certificate.fromCertificateArn(
-      this,  
-      'APICertificate',  
+      this,
+      'APICertificate',
       'arn:aws:acm:us-east-1:069597727371:certificate/146132c0-6175-4ce3-8edf-0d4108d53287'
     );
 
-    // Creating the Fargate service that will host our docker image/container
-    const fargateService = new ecsPatterns.ApplicationLoadBalancedFargateService(this, 'GoApiFargateService', {
-      cluster: cluster,
-      cpu: 256,
-      memoryLimitMiB: 512,
-      desiredCount: 1,
-      taskImageOptions: {
-        image: ecs.ContainerImage.fromRegistry('069597727371.dkr.ecr.us-east-1.amazonaws.com/go-api:latest'),
-        containerPort: 8080,
-      },
-      publicLoadBalancer: true,
-      certificate: certificate,
-      redirectHTTP: true, // Optional: Redirects HTTP to HTTPS
-    });
+    // Fargate Service hosting Go API
+    const fargateService = new ecsPatterns.ApplicationLoadBalancedFargateService(
+      this,
+      'GoApiFargateService',
+      {
+        cluster,
+        cpu: 256,
+        memoryLimitMiB: 512,
+        desiredCount: 1,
+        taskImageOptions: {
+          image: ecs.ContainerImage.fromRegistry(
+            '069597727371.dkr.ecr.us-east-1.amazonaws.com/go-api:latest'
+          ),
+          containerPort: 8080,
+        },
+        publicLoadBalancer: true,
+        certificate,
+        redirectHTTP: true,
+      }
+    );
 
-    // Update the ALB health check to use /api/healthcheck instead of the default "/"
+    // Update health check path
     fargateService.targetGroup.configureHealthCheck({
       path: '/api/healthcheck',
       interval: cdk.Duration.seconds(30),
@@ -61,52 +69,45 @@ def handler(event, context):
       unhealthyThresholdCount: 5,
     });
 
-    // Grant the task execution role permissions to access ECR
+    // ECR permissions
     fargateService.taskDefinition.addToExecutionRolePolicy(
       new iam.PolicyStatement({
         effect: iam.Effect.ALLOW,
         actions: [
-          "ecr:GetAuthorizationToken",
-          "ecr:BatchCheckLayerAvailability",
-          "ecr:GetDownloadUrlForLayer",
-          "ecr:BatchGetImage"
+          'ecr:GetAuthorizationToken',
+          'ecr:BatchCheckLayerAvailability',
+          'ecr:GetDownloadUrlForLayer',
+          'ecr:BatchGetImage',
         ],
-        resources: ["*"],
+        resources: ['*'],
       })
     );
 
-    // Grant the task execution role permissions to access Secrets Manager
-    // This allows the task to call secretsmanager:GetSecretValue on your secret ARN.
+    // Secrets Manager permissions
     fargateService.taskDefinition.addToExecutionRolePolicy(
       new iam.PolicyStatement({
         effect: iam.Effect.ALLOW,
-        actions: ["secretsmanager:GetSecretValue"],
-        resources: ["arn:aws:secretsmanager:us-east-1:069597727371:secret:staging/go-api-3V2g50*"],
+        actions: ['secretsmanager:GetSecretValue'],
+        resources: [
+          'arn:aws:secretsmanager:us-east-1:069597727371:secret:staging/go-api-3V2g50*',
+        ],
       })
     );
 
-    // Grant the task role permissions to call EventBridge
+    // EventBridge permissions for the task role if needed
     fargateService.taskDefinition.taskRole.addToPrincipalPolicy(
       new iam.PolicyStatement({
         effect: iam.Effect.ALLOW,
-        actions: [
-          'events:PutRule',    // create/update rules
-          'events:PutTargets', // attach targets to rules
-          // optionally add 'events:DescribeRule', 'events:DeleteRule', etc.
-        ],
-        resources: [
-          // scope as narrowly as you like:
-          // 'arn:aws:events:us-east-1:069597727371:rule/my-scheduled-event',
-          'arn:aws:events:us-east-1:069597727371:rule/*',
-        ],
+        actions: ['events:PutRule', 'events:PutTargets'],
+        resources: [`arn:aws:events:${this.region}:${this.account}:rule/*`],
       })
     );
 
+    // Outputs
     new cdk.CfnOutput(this, 'LoadBalancerDNS', {
       value: fargateService.loadBalancer.loadBalancerDnsName,
     });
 
-    // Output the Lambda ARN
     new cdk.CfnOutput(this, 'LambdaARN', {
       value: processDataLambda.functionArn,
       description: 'ARN of the Process Data Lambda function',
