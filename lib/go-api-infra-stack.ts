@@ -1,4 +1,3 @@
-
 import * as cdk from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
@@ -20,9 +19,7 @@ export class GoApiInfraStack extends cdk.Stack {
     const processDataLambda = new lambda.Function(this, 'ProcessDataLambda', {
       runtime: lambda.Runtime.PYTHON_3_9,
       handler: 'index.handler',
-      code: lambda.Code.fromInline(
-        `def handler(event, context):\n  print(\"Received event:\", event)\n  return { 'statusCode': 200, 'body': 'Event received successfully!' }`
-      ),
+      code: lambda.Code.fromAsset('lambda'),
     });
 
     // Allow EventBridge to invoke the Lambda (managed out-of-band)
@@ -98,7 +95,7 @@ export class GoApiInfraStack extends cdk.Stack {
     fargateService.taskDefinition.taskRole.addToPrincipalPolicy(
       new iam.PolicyStatement({
         effect: iam.Effect.ALLOW,
-        actions: ['events:PutRule', 'events:PutTargets'],
+        actions: ['events:PutRule', 'events:PutTargets', 'events:ListRules'],
         resources: [`arn:aws:events:${this.region}:${this.account}:rule/*`],
       })
     );
