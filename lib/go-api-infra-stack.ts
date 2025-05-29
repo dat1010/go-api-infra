@@ -95,7 +95,7 @@ export class GoApiInfraStack extends cdk.Stack {
     fargateService.taskDefinition.taskRole.addToPrincipalPolicy(
       new iam.PolicyStatement({
         effect: iam.Effect.ALLOW,
-        actions: ['events:PutRule', 'events:PutTargets', 'events:ListRules'],
+        actions: ['events:PutRule', 'events:PutTargets', 'events:ListRules', 'events:ListTargetsByRule'],
         resources: [`arn:aws:events:${this.region}:${this.account}:rule/*`],
       })
     );
