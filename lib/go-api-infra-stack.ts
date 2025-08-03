@@ -11,32 +11,43 @@ export class GoApiInfraStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
 
-    // VPC and ECS Cluster
-    const vpc = new ec2.Vpc(this, 'GoApiVpc', { maxAzs: 2 });
+    // 1) VPC with only public subnets (no NAT Gateways)
+    const vpc = new ec2.Vpc(this, 'GoApiVpc', {
+      maxAzs: 2,
+      natGateways: 0,
+      subnetConfiguration: [
+        {
+          name: 'Public',
+          subnetType: ec2.SubnetType.PUBLIC,
+          cidrMask: 24,
+        },
+      ],
+    });
+
+    // 2) ECS Cluster in that VPC
     const cluster = new ecs.Cluster(this, 'GoApiCluster', { vpc });
 
-    // Create a simple Lambda function
+    // 3) Lambda function (unchanged)
     const processDataLambda = new lambda.Function(this, 'ProcessDataLambda', {
       runtime: lambda.Runtime.PYTHON_3_9,
       handler: 'index.handler',
       code: lambda.Code.fromAsset('lambda'),
     });
 
-    // Allow EventBridge to invoke the Lambda (managed out-of-band)
     processDataLambda.addPermission('AllowEventBridgeInvoke', {
       principal: new iam.ServicePrincipal('events.amazonaws.com'),
       action: 'lambda:InvokeFunction',
       sourceArn: `arn:aws:events:${this.region}:${this.account}:rule/*`,
     });
 
-    // Reference existing certificate
+    // 4) Reference existing ACM certificate
     const certificate = acm.Certificate.fromCertificateArn(
       this,
       'APICertificate',
       'arn:aws:acm:us-east-1:069597727371:certificate/146132c0-6175-4ce3-8edf-0d4108d53287'
     );
 
-    // Fargate Service hosting Go API
+    // 5) Fargate Service in public subnets—with public IPs
     const fargateService = new ecsPatterns.ApplicationLoadBalancedFargateService(
       this,
       'GoApiFargateService',
@@ -45,19 +56,20 @@ export class GoApiInfraStack extends cdk.Stack {
         cpu: 256,
         memoryLimitMiB: 512,
         desiredCount: 1,
+        publicLoadBalancer: true,
+        taskSubnets: { subnetType: ec2.SubnetType.PUBLIC },
+        assignPublicIp: true,
         taskImageOptions: {
           image: ecs.ContainerImage.fromRegistry(
             '069597727371.dkr.ecr.us-east-1.amazonaws.com/go-api:latest'
           ),
           containerPort: 8080,
         },
-        publicLoadBalancer: true,
         certificate,
         redirectHTTP: true,
       }
     );
 
-    // Update health check path
     fargateService.targetGroup.configureHealthCheck({
       path: '/api/healthcheck',
       interval: cdk.Duration.seconds(30),
@@ -66,7 +78,7 @@ export class GoApiInfraStack extends cdk.Stack {
       unhealthyThresholdCount: 5,
     });
 
-    // ECR permissions
+    // 6) ECR & SecretsManager permissions (unchanged)
     fargateService.taskDefinition.addToExecutionRolePolicy(
       new iam.PolicyStatement({
         effect: iam.Effect.ALLOW,
@@ -80,7 +92,6 @@ export class GoApiInfraStack extends cdk.Stack {
       })
     );
 
-    // Secrets Manager permissions
     fargateService.taskDefinition.addToExecutionRolePolicy(
       new iam.PolicyStatement({
         effect: iam.Effect.ALLOW,
@@ -91,7 +102,6 @@ export class GoApiInfraStack extends cdk.Stack {
       })
     );
 
-    // EventBridge permissions for the task role if needed
     fargateService.taskDefinition.taskRole.addToPrincipalPolicy(
       new iam.PolicyStatement({
         effect: iam.Effect.ALLOW,
@@ -100,7 +110,7 @@ export class GoApiInfraStack extends cdk.Stack {
       })
     );
 
-    // Outputs
+    // 7) Outputs
     new cdk.CfnOutput(this, 'LoadBalancerDNS', {
       value: fargateService.loadBalancer.loadBalancerDnsName,
     });
@@ -111,3 +121,4 @@ export class GoApiInfraStack extends cdk.Stack {
     });
   }
 }
+
