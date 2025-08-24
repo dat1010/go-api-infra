@@ -29,7 +29,7 @@ export class GoApiInfraStack extends cdk.Stack {
 
     // 3) Lambda function (unchanged)
     const processDataLambda = new lambda.Function(this, 'ProcessDataLambda', {
-      runtime: lambda.Runtime.PYTHON_3_9,
+      runtime: lambda.Runtime.PYTHON_3_11,
       handler: 'index.handler',
       code: lambda.Code.fromAsset('lambda'),
     });
