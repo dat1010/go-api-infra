@@ -4,7 +4,7 @@ import os
 
 def handler(event, context):
     # Discord webhook URL
-    webhook_url = "https://discord.com/api/webhooks/1082709454593724437/VOKVBFLrNOxpvlU3z_pdcRIrndHy_-1fT67GHlWwFRCZK4nSiLjRtHsh0JNTOwwzjz_y"
+    webhook_url = "https://discord.com/api/webhooks/1463686090308456660/a_OjI80L-0Od2CPIEll_ECnvsGkENtBeDCAOEuBBkEA3C1nkpqyYWGu73lEIPpZGVtfR"
     
     # Create HTTP client
     http = urllib3.PoolManager()
