@@ -6,6 +6,7 @@ import * as ecsPatterns from 'aws-cdk-lib/aws-ecs-patterns';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as rds from 'aws-cdk-lib/aws-rds';
 
 export class GoApiInfraStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
@@ -70,6 +71,75 @@ export class GoApiInfraStack extends cdk.Stack {
       }
     );
 
+    // 5a) Aurora Serverless v2 (Postgres) in public subnets (no public access)
+    const dbSecurityGroup = new ec2.SecurityGroup(this, 'GoApiDbSecurityGroup', {
+      vpc,
+      description: 'Security group for Aurora Postgres',
+      allowAllOutbound: true,
+    });
+
+    const dbCredentials = rds.Credentials.fromGeneratedSecret('dbadmin');
+
+    const dbCluster = new rds.DatabaseCluster(this, 'GoApiAuroraCluster', {
+      engine: rds.DatabaseClusterEngine.auroraPostgres({
+        version: rds.AuroraPostgresEngineVersion.VER_15_8,
+      }),
+      vpc,
+      vpcSubnets: { subnetType: ec2.SubnetType.PUBLIC },
+      securityGroups: [dbSecurityGroup],
+      writer: rds.ClusterInstance.serverlessV2('Writer', {
+        publiclyAccessible: false,
+      }),
+      serverlessV2MinCapacity: 0.5,
+      serverlessV2MaxCapacity: 1,
+      credentials: dbCredentials,
+      defaultDatabaseName: 'app',
+      backup: {
+        retention: cdk.Duration.days(1),
+      },
+      deletionProtection: false,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
+    // Allow ECS tasks to connect to the DB
+    dbCluster.connections.allowDefaultPortFrom(fargateService.service, 'ECS to Aurora');
+
+    if (dbCluster.secret) {
+      dbCluster.secret.grantRead(fargateService.taskDefinition.taskRole);
+    }
+
+    // 5b) SSM-only bastion host (no inbound rules)
+    const bastionSecurityGroup = new ec2.SecurityGroup(this, 'GoApiBastionSecurityGroup', {
+      vpc,
+      description: 'Security group for SSM bastion',
+      allowAllOutbound: true,
+    });
+
+    const bastionRole = new iam.Role(this, 'GoApiBastionRole', {
+      assumedBy: new iam.ServicePrincipal('ec2.amazonaws.com'),
+    });
+    bastionRole.addManagedPolicy(
+      iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonSSMManagedInstanceCore')
+    );
+
+    const bastion = new ec2.Instance(this, 'GoApiBastion', {
+      vpc,
+      vpcSubnets: { subnetType: ec2.SubnetType.PUBLIC },
+      instanceType: ec2.InstanceType.of(ec2.InstanceClass.T3, ec2.InstanceSize.NANO),
+      machineImage: ec2.MachineImage.latestAmazonLinux2023(),
+      securityGroup: bastionSecurityGroup,
+      role: bastionRole,
+    });
+
+    // Install psql client
+    bastion.addUserData('dnf install -y postgresql15');
+
+    // Allow bastion to connect to the DB
+    dbCluster.connections.allowDefaultPortFrom(bastion, 'Bastion to Aurora');
+    if (dbCluster.secret) {
+      dbCluster.secret.grantRead(bastionRole);
+    }
+
     fargateService.targetGroup.configureHealthCheck({
       path: '/api/healthcheck',
       interval: cdk.Duration.seconds(30),
@@ -119,6 +189,19 @@ export class GoApiInfraStack extends cdk.Stack {
       value: processDataLambda.functionArn,
       description: 'ARN of the Process Data Lambda function',
     });
+
+    new cdk.CfnOutput(this, 'AuroraEndpoint', {
+      value: dbCluster.clusterEndpoint.hostname,
+    });
+
+    if (dbCluster.secret) {
+      new cdk.CfnOutput(this, 'AuroraSecretArn', {
+        value: dbCluster.secret.secretArn,
+      });
+    }
+
+    new cdk.CfnOutput(this, 'BastionInstanceId', {
+      value: bastion.instanceId,
+    });
   }
 }
-
