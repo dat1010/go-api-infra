@@ -7,6 +7,7 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as rds from 'aws-cdk-lib/aws-rds';
+import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 
 export class GoApiInfraStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
@@ -48,6 +49,12 @@ export class GoApiInfraStack extends cdk.Stack {
       'arn:aws:acm:us-east-1:069597727371:certificate/146132c0-6175-4ce3-8edf-0d4108d53287'
     );
 
+    const authConfigSecret = secretsmanager.Secret.fromSecretNameV2(
+      this,
+      'GoApiAuthConfigSecret',
+      'staging/go-api'
+    );
+
     // 5) Fargate Service in public subnets—with public IPs
     const fargateService = new ecsPatterns.ApplicationLoadBalancedFargateService(
       this,
@@ -65,47 +72,72 @@ export class GoApiInfraStack extends cdk.Stack {
             '069597727371.dkr.ecr.us-east-1.amazonaws.com/go-api:latest'
           ),
           containerPort: 8080,
+          secrets: {
+            AUTH0_AUDIENCE: ecs.Secret.fromSecretsManager(authConfigSecret, 'AUTH0_AUDIENCE'),
+            AUTH0_DOMAIN: ecs.Secret.fromSecretsManager(authConfigSecret, 'AUTH0_DOMAIN'),
+            AUTH0_CALLBACK_URL: ecs.Secret.fromSecretsManager(
+              authConfigSecret,
+              'AUTH0_CALLBACK_URL'
+            ),
+            AUTH0_CLIENT_ID: ecs.Secret.fromSecretsManager(
+              authConfigSecret,
+              'AUTH0_CLIENT_ID'
+            ),
+            AUTH0_CLIENT_SECRET: ecs.Secret.fromSecretsManager(
+              authConfigSecret,
+              'AUTH0_CLIENT_SECRET'
+            ),
+            AUTH0_LOGOUT_RETURN_URL: ecs.Secret.fromSecretsManager(
+              authConfigSecret,
+              'AUTH0_LOGOUT_RETURN_URL'
+            ),
+          },
         },
         certificate,
         redirectHTTP: true,
       }
     );
 
-    // 5a) Aurora Serverless v2 (Postgres) in public subnets (no public access)
+    // 5a) RDS PostgreSQL db.t4g.micro in public subnets (no public access)
     const dbSecurityGroup = new ec2.SecurityGroup(this, 'GoApiDbSecurityGroup', {
       vpc,
-      description: 'Security group for Aurora Postgres',
+      description: 'Security group for RDS Postgres',
       allowAllOutbound: true,
     });
 
     const dbCredentials = rds.Credentials.fromGeneratedSecret('dbadmin');
 
-    const dbCluster = new rds.DatabaseCluster(this, 'GoApiAuroraCluster', {
-      engine: rds.DatabaseClusterEngine.auroraPostgres({
-        version: rds.AuroraPostgresEngineVersion.VER_15_8,
+    const dbInstance = new rds.DatabaseInstance(this, 'GoApiPostgresInstance', {
+      engine: rds.DatabaseInstanceEngine.postgres({
+        version: rds.PostgresEngineVersion.VER_15,
       }),
+      instanceType: ec2.InstanceType.of(
+        ec2.InstanceClass.BURSTABLE4_GRAVITON,
+        ec2.InstanceSize.MICRO
+      ),
       vpc,
       vpcSubnets: { subnetType: ec2.SubnetType.PUBLIC },
       securityGroups: [dbSecurityGroup],
-      writer: rds.ClusterInstance.serverlessV2('Writer', {
-        publiclyAccessible: false,
-      }),
-      serverlessV2MinCapacity: 0.5,
-      serverlessV2MaxCapacity: 1,
       credentials: dbCredentials,
-      defaultDatabaseName: 'app',
-      backup: {
-        retention: cdk.Duration.days(1),
-      },
+      databaseName: 'nofeed',
+      allocatedStorage: 20,
+      storageType: rds.StorageType.GP3,
+      multiAz: false,
+      publiclyAccessible: false,
+      backupRetention: cdk.Duration.days(1),
       deletionProtection: false,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
     // Allow ECS tasks to connect to the DB
-    dbCluster.connections.allowDefaultPortFrom(fargateService.service, 'ECS to Aurora');
+    dbInstance.connections.allowDefaultPortFrom(fargateService.service, 'ECS to RDS');
 
-    if (dbCluster.secret) {
-      dbCluster.secret.grantRead(fargateService.taskDefinition.taskRole);
+    if (dbInstance.secret) {
+      fargateService.taskDefinition.defaultContainer?.addEnvironment(
+        'DB_SECRET_ARN',
+        dbInstance.secret.secretArn
+      );
+      dbInstance.secret.grantRead(fargateService.taskDefinition.taskRole);
     }
 
     // 5b) SSM-only bastion host (no inbound rules)
@@ -135,9 +167,9 @@ export class GoApiInfraStack extends cdk.Stack {
     bastion.addUserData('dnf install -y postgresql15');
 
     // Allow bastion to connect to the DB
-    dbCluster.connections.allowDefaultPortFrom(bastion, 'Bastion to Aurora');
-    if (dbCluster.secret) {
-      dbCluster.secret.grantRead(bastionRole);
+    dbInstance.connections.allowDefaultPortFrom(bastion, 'Bastion to RDS');
+    if (dbInstance.secret) {
+      dbInstance.secret.grantRead(bastionRole);
     }
 
     fargateService.targetGroup.configureHealthCheck({
@@ -166,11 +198,11 @@ export class GoApiInfraStack extends cdk.Stack {
       new iam.PolicyStatement({
         effect: iam.Effect.ALLOW,
         actions: ['secretsmanager:GetSecretValue'],
-        resources: [
-          'arn:aws:secretsmanager:us-east-1:069597727371:secret:staging/go-api-3V2g50*',
-        ],
+        resources: [authConfigSecret.secretArn],
       })
     );
+
+    authConfigSecret.grantRead(fargateService.taskDefinition.executionRole!);
 
     fargateService.taskDefinition.taskRole.addToPrincipalPolicy(
       new iam.PolicyStatement({
@@ -190,13 +222,13 @@ export class GoApiInfraStack extends cdk.Stack {
       description: 'ARN of the Process Data Lambda function',
     });
 
-    new cdk.CfnOutput(this, 'AuroraEndpoint', {
-      value: dbCluster.clusterEndpoint.hostname,
+    new cdk.CfnOutput(this, 'PostgresEndpoint', {
+      value: dbInstance.instanceEndpoint.hostname,
     });
 
-    if (dbCluster.secret) {
-      new cdk.CfnOutput(this, 'AuroraSecretArn', {
-        value: dbCluster.secret.secretArn,
+    if (dbInstance.secret) {
+      new cdk.CfnOutput(this, 'PostgresSecretArn', {
+        value: dbInstance.secret.secretArn,
       });
     }
 

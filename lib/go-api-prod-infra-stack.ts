@@ -4,6 +4,7 @@ import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
 import * as ecsPatterns from 'aws-cdk-lib/aws-ecs-patterns';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 
 export class GoApiProdInfraStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
@@ -41,6 +42,12 @@ export class GoApiProdInfraStack extends cdk.Stack {
     // Create the ECS Cluster within the VPC
     const cluster = new ecs.Cluster(this, 'GoApiProdCluster', { vpc });
 
+    const authConfigSecret = secretsmanager.Secret.fromSecretNameV2(
+      this,
+      'GoApiProdAuthConfigSecret',
+      'staging/go-api'
+    );
+
     // Create a Fargate service with production-grade configurations
     const fargateService = new ecsPatterns.ApplicationLoadBalancedFargateService(this, 'GoApiProdFargateService', {
       cluster: cluster,
@@ -53,6 +60,26 @@ export class GoApiProdInfraStack extends cdk.Stack {
         image: ecs.ContainerImage.fromRegistry('069597727371.dkr.ecr.us-east-1.amazonaws.com/go-api:latest'),
         containerPort: 8080,
         enableLogging: true,
+        secrets: {
+          AUTH0_AUDIENCE: ecs.Secret.fromSecretsManager(authConfigSecret, 'AUTH0_AUDIENCE'),
+          AUTH0_DOMAIN: ecs.Secret.fromSecretsManager(authConfigSecret, 'AUTH0_DOMAIN'),
+          AUTH0_CALLBACK_URL: ecs.Secret.fromSecretsManager(
+            authConfigSecret,
+            'AUTH0_CALLBACK_URL'
+          ),
+          AUTH0_CLIENT_ID: ecs.Secret.fromSecretsManager(
+            authConfigSecret,
+            'AUTH0_CLIENT_ID'
+          ),
+          AUTH0_CLIENT_SECRET: ecs.Secret.fromSecretsManager(
+            authConfigSecret,
+            'AUTH0_CLIENT_SECRET'
+          ),
+          AUTH0_LOGOUT_RETURN_URL: ecs.Secret.fromSecretsManager(
+            authConfigSecret,
+            'AUTH0_LOGOUT_RETURN_URL'
+          ),
+        },
 
       },
       publicLoadBalancer: true,
@@ -100,9 +127,11 @@ export class GoApiProdInfraStack extends cdk.Stack {
       new iam.PolicyStatement({
         effect: iam.Effect.ALLOW,
         actions: ["secretsmanager:GetSecretValue"],
-        resources: ["arn:aws:secretsmanager:us-east-1:069597727371:secret:staging/go-api-3V2g50*"],
+        resources: [authConfigSecret.secretArn],
       })
     );
+
+    authConfigSecret.grantRead(fargateService.taskDefinition.executionRole!);
 
 
     // Output the load balancer DNS so you can easily access the service
